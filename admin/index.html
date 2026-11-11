@@ -16,6 +16,10 @@
     .alt { background: #eee; color: #333; }
     article { border-top: 1px solid #ddd; padding: 16px 0; overflow-wrap: anywhere; }
     article p { white-space: pre-wrap; }
+    .highlight-editor { padding: 12px 14px; margin: 16px 0 4px; background: #fff5f8; border-radius: 8px; }
+    .highlight-editor label { margin-top: 0; }
+    .highlight-editor textarea { display: block; width: 100%; box-sizing: border-box; margin: 6px 0; padding: 8px; font: inherit; }
+    .highlight-editor [role="status"] { margin: 0; }
   </style>
 </head>
 <body>
@@ -30,7 +34,96 @@ el('savePassword').onclick=async()=>{const p=el('newPassword').value;if(p.length
   el('loginPanel').hidden = true;
 } else {
   sync();
-}el('login').onclick=async()=>{const {error}=await db.auth.signInWithPassword({email:el('email').value,password:el('password').value});el('adminMsg').textContent=error?'로그인 실패: '+error.message:'';if(!error)sync()};el('logout').onclick=async()=>{await db.auth.signOut();sync()};async function sync(){const {data:{session}}=await db.auth.getSession();el('loginPanel').hidden=!!session;el('dashboard').hidden=!session;if(session)refresh();else {records=[];el('entries').replaceChildren();el('stats').textContent=''}}el('refresh').onclick=refresh;async function refresh(){const {data,error}=await db.from('wise_reviews').select('*').order('created_at',{ascending:false}).limit(1000);if(error){el('adminMsg').textContent=error.message;return}records=data||[];el('stats').textContent='후기 '+records.length+'건';el('entries').innerHTML=records.map(x=>'<article><b>'+escapeHtml(x.student_name)+' / '+escapeHtml(x.grade)+' / '+escapeHtml(x.subject)+' / ★'+escapeHtml(x.rating)+'</b><p>'+escapeHtml(x.best)+'</p><p>좋았던 점: '+escapeHtml((x.good||[]).join(', '))+'</p><p>바라는 점: '+escapeHtml(x.change_request)+'</p><p>홍보 동의: '+(x.publish?'예':'아니요')+'</p><button data-id="'+escapeHtml(x.id)+'" class="alt">삭제</button></article>').join('')||'후기가 없거나 관리자 권한이 없습니다.';document.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{if(!confirm('이 후기를 삭제하시겠어요?'))return;const {error}=await db.from('wise_reviews').delete().eq('id',b.dataset.id);if(error)alert(error.message);else refresh()})}el('download').onclick=()=>{const columns=['created_at','student_name','grade','subject','rating','good','best','change_request','publish'],q=x=>'"'+String(Array.isArray(x)?x.join('; '):x??'').replace(/^[=+@-]/,m=>"'"+m).replace(/"/g,'""')+'"',content=[columns.join(','),...records.map(r=>columns.map(c=>q(r[c])).join(','))].join('\r\n'),url=URL.createObjectURL(new Blob(['\uFEFF'+content],{type:'text/csv'})),a=document.createElement('a');a.href=url;a.download='wise_reviews.csv';a.click();URL.revokeObjectURL(url)};
+}el('login').onclick=async()=>{const {error}=await db.auth.signInWithPassword({email:el('email').value,password:el('password').value});el('adminMsg').textContent=error?'로그인 실패: '+error.message:'';if(!error)sync()};el('logout').onclick=async()=>{await db.auth.signOut();sync()};async function sync(){const {data:{session}}=await db.auth.getSession();el('loginPanel').hidden=!!session;el('dashboard').hidden=!session;if(session)refresh();else {records=[];el('entries').replaceChildren();el('stats').textContent=''}}el('refresh').onclick = refresh;
+
+async function refresh() {
+  const [reviews, highlights] = await Promise.all([
+    db.from('wise_reviews').select('*').order('created_at', { ascending: false }).limit(1000),
+    db.from('wise_review_highlights').select('review_id,excerpt')
+  ]);
+  if (reviews.error || highlights.error) {
+    el('adminMsg').textContent = '후기 목록을 불러오지 못했습니다.';
+    return;
+  }
+
+  records = reviews.data ?? [];
+  const published = new Map((highlights.data ?? []).map(item => [item.review_id, item.excerpt]));
+  el('stats').textContent = '후기 ' + records.length + '건';
+  el('entries').innerHTML = records.map(review =>
+    '<article><b>' + escapeHtml(review.student_name) + ' / ' + escapeHtml(review.grade) +
+    ' / ' + escapeHtml(review.subject) + ' / ★' + escapeHtml(review.rating) +
+    '</b><p>' + escapeHtml(review.best) + '</p><p>좋았던 점: ' +
+    escapeHtml((review.good ?? []).join(', ')) + '</p><p>바라는 점: ' +
+    escapeHtml(review.change_request) + '</p><p>홍보 동의: ' +
+    (review.publish ? '예' : '아니요') + '</p><button type="button" class="alt">삭제</button></article>'
+  ).join('') || '후기가 없거나 관리자 권한이 없습니다.';
+
+  [...el('entries').querySelectorAll('article')].forEach((article, index) => {
+    const review = records[index];
+    const remove = article.querySelector('button');
+    remove.onclick = async () => {
+      if (!confirm('이 후기를 삭제하시겠어요?')) return;
+      const { error } = await db.from('wise_reviews').delete().eq('id', review.id);
+      if (error) alert(error.message);
+      else refresh();
+    };
+    if (review.publish) {
+      remove.before(createHighlightEditor(review, published.get(review.id)));
+    }
+  });
+}
+
+function createHighlightEditor(review, currentExcerpt) {
+  const form = document.createElement('form');
+  form.className = 'highlight-editor';
+  form.innerHTML = '<label>홈페이지에 표시할 익명 문구<textarea rows="2" maxlength="240" required></textarea></label>' +
+    '<small>학생이나 가족을 알아볼 수 있는 정보는 빼 주세요.</small>' +
+    '<div><button type="submit"></button><button type="button" class="alt">홈페이지에서 내리기</button></div>' +
+    '<p role="status"></p>';
+
+  const input = form.querySelector('textarea');
+  const [publish, hide] = form.querySelectorAll('button');
+  const status = form.querySelector('[role="status"]');
+  input.value = currentExcerpt ?? review.best.slice(0, 240);
+
+  function showState(isPublished, message) {
+    publish.textContent = isPublished ? '공개 문구 저장' : '홈페이지에 공개';
+    hide.hidden = !isPublished;
+    status.textContent = message;
+  }
+  showState(currentExcerpt !== undefined, currentExcerpt !== undefined ? '홈페이지 공개 중' : '홈페이지 비공개');
+
+  async function save(isPublished) {
+    const excerpt = input.value.trim();
+    if (isPublished && !excerpt) {
+      status.textContent = '공개할 문구를 입력해 주세요.';
+      return;
+    }
+
+    input.disabled = publish.disabled = hide.disabled = true;
+    try {
+      const table = db.from('wise_review_highlights');
+      const { error } = isPublished
+        ? await table.upsert({ review_id: review.id, excerpt })
+        : await table.delete().eq('review_id', review.id);
+      if (error) throw error;
+      showState(isPublished, isPublished ? '홈페이지 공개 문구를 저장했습니다.' : '홈페이지에서 내렸습니다.');
+    } catch {
+      status.textContent = '공개 상태를 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.';
+    } finally {
+      input.disabled = publish.disabled = hide.disabled = false;
+    }
+  }
+
+  form.onsubmit = event => {
+    event.preventDefault();
+    save(true);
+  };
+  hide.onclick = () => save(false);
+  return form;
+}
+
+el('download').onclick=()=>{const columns=['created_at','student_name','grade','subject','rating','good','best','change_request','publish'],q=x=>'"'+String(Array.isArray(x)?x.join('; '):x??'').replace(/^[=+@-]/,m=>"'"+m).replace(/"/g,'""')+'"',content=[columns.join(','),...records.map(r=>columns.map(c=>q(r[c])).join(','))].join('\r\n'),url=URL.createObjectURL(new Blob(['\uFEFF'+content],{type:'text/csv'})),a=document.createElement('a');a.href=url;a.download='wise_reviews.csv';a.click();URL.revokeObjectURL(url)};
 
 </script>
 </body>
