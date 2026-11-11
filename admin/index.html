@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>학생 수업 후기 관리 | 와이즈만영재교육 하남센터</title>
+  <style>
+    body { margin: 0; background: #fff3f5; color: #292327; font: 16px/1.55 system-ui, sans-serif; }
+    main { max-width: 700px; margin: 28px auto; padding: 0 16px; }
+    .card { background: white; padding: clamp(16px, 4vw, 25px); border-radius: 16px; }
+    a { color: #9b1e41; }
+    label { display: block; font-weight: 600; margin-top: 16px; }
+    input { width: 100%; box-sizing: border-box; margin-top: 6px; padding: 12px; border: 1px solid #aaa; border-radius: 8px; font: inherit; }
+    button { border: 0; border-radius: 8px; padding: 12px 17px; background: #aa2148; color: white; margin: 10px 5px 8px 0; cursor: pointer; font: inherit; }
+    .alt { background: #eee; color: #333; }
+    article { border-top: 1px solid #ddd; padding: 16px 0; overflow-wrap: anywhere; }
+    article p { white-space: pre-wrap; }
+  </style>
+</head>
+<body>
+<main>
+<section class="card" id="admin"><p><a href="https://hawhy.net/admin/schedule/">← 홈페이지 관리자</a></p><h2>관리자 후기 관리</h2><div id="setupPanel" hidden><h3>관리자 비밀번호 설정</h3><p>초대 또는 비밀번호 재설정 이메일의 링크로 들어오셨습니다.</p><label>새 비밀번호 (8자 이상)<input id="newPassword" type="password" minlength="8" autocomplete="new-password"></label><button id="savePassword">비밀번호 저장</button><p id="setupMessage" role="status"></p></div><div id="loginPanel"><label>관리자 이메일<input type="email" id="email"></label><label>비밀번호<input type="password" id="password"></label><button id="login">로그인</button><button id="resetPassword" class="alt">비밀번호 설정 이메일 다시 받기</button></div><div id="dashboard" hidden><button id="refresh">새로고침</button><button id="download">CSV 다운로드</button><button class="alt" id="logout">로그아웃</button><p id="stats"></p><div id="entries"></div></div><p id="adminMsg"></p></section>
+</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.57.0/dist/umd/supabase.min.js"></script>
+<script>
+const db=supabase.createClient('https://manscpjvvpiucefuovqk.supabase.co','sb_publishable_cQJ-TkK4TIQUEaHu4OF5Kg_DCf5uMQe');const el=x=>document.getElementById(x),escapeHtml=x=>String(x??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));let records = [];
+el('savePassword').onclick=async()=>{const p=el('newPassword').value;if(p.length<8){el('setupMessage').textContent='비밀번호는 8자 이상으로 설정해 주세요.';return}const {error}=await db.auth.updateUser({password:p});el('setupMessage').textContent=error?'설정 실패: '+error.message:'비밀번호가 설정되었습니다. 이제 관리자 페이지에 로그인할 수 있어요.';if(!error){el('newPassword').value='';el('setupPanel').hidden=true;history.replaceState({},'',location.pathname);sync()}};el('resetPassword').onclick=async()=>{const email=el('email').value.trim();if(!email){el('adminMsg').textContent='관리자 이메일을 먼저 입력해 주세요.';return}const {error}=await db.auth.resetPasswordForEmail(email,{redirectTo:location.origin+'/'});el('adminMsg').textContent=error?'이메일 요청 실패: '+error.message:'비밀번호 설정 링크를 발송했습니다. 메일함을 확인해 주세요.'};db.auth.onAuthStateChange((event)=>{if(event==='PASSWORD_RECOVERY'){el('setupPanel').hidden=false;el('loginPanel').hidden=true;el('dashboard').hidden=true}});if (['invite', 'recovery'].includes(new URLSearchParams(location.hash.slice(1)).get('type'))) {
+  el('setupPanel').hidden = false;
+  el('loginPanel').hidden = true;
+} else {
+  sync();
+}el('login').onclick=async()=>{const {error}=await db.auth.signInWithPassword({email:el('email').value,password:el('password').value});el('adminMsg').textContent=error?'로그인 실패: '+error.message:'';if(!error)sync()};el('logout').onclick=async()=>{await db.auth.signOut();sync()};async function sync(){const {data:{session}}=await db.auth.getSession();el('loginPanel').hidden=!!session;el('dashboard').hidden=!session;if(session)refresh();else {records=[];el('entries').replaceChildren();el('stats').textContent=''}}el('refresh').onclick=refresh;async function refresh(){const {data,error}=await db.from('wise_reviews').select('*').order('created_at',{ascending:false}).limit(1000);if(error){el('adminMsg').textContent=error.message;return}records=data||[];el('stats').textContent='후기 '+records.length+'건';el('entries').innerHTML=records.map(x=>'<article><b>'+escapeHtml(x.student_name)+' / '+escapeHtml(x.grade)+' / '+escapeHtml(x.subject)+' / ★'+escapeHtml(x.rating)+'</b><p>'+escapeHtml(x.best)+'</p><p>좋았던 점: '+escapeHtml((x.good||[]).join(', '))+'</p><p>바라는 점: '+escapeHtml(x.change_request)+'</p><p>홍보 동의: '+(x.publish?'예':'아니요')+'</p><button data-id="'+escapeHtml(x.id)+'" class="alt">삭제</button></article>').join('')||'후기가 없거나 관리자 권한이 없습니다.';document.querySelectorAll('[data-id]').forEach(b=>b.onclick=async()=>{if(!confirm('이 후기를 삭제하시겠어요?'))return;const {error}=await db.from('wise_reviews').delete().eq('id',b.dataset.id);if(error)alert(error.message);else refresh()})}el('download').onclick=()=>{const columns=['created_at','student_name','grade','subject','rating','good','best','change_request','publish'],q=x=>'"'+String(Array.isArray(x)?x.join('; '):x??'').replace(/^[=+@-]/,m=>"'"+m).replace(/"/g,'""')+'"',content=[columns.join(','),...records.map(r=>columns.map(c=>q(r[c])).join(','))].join('\r\n'),url=URL.createObjectURL(new Blob(['\uFEFF'+content],{type:'text/csv'})),a=document.createElement('a');a.href=url;a.download='wise_reviews.csv';a.click();URL.revokeObjectURL(url)};
+
+</script>
+</body>
+</html>
